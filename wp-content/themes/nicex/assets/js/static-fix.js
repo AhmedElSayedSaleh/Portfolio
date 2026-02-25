@@ -1,320 +1,312 @@
 /**
- * Static Portfolio Fix
- * Pure frontend filtering and Load More for static WordPress export
- * Replaces AJAX-based filtering in app.min.js
+ * Portfolio Static Fix - Clean Vanilla JS Implementation
  * 
- * Features:
- * - Category filtering with dynamic category detection
- * - Load More: 8 initial items, 8 more per click
- * - Disables button when all items loaded
- * - Preserves hover image preview logic
- * - Safe GSAP animations
+ * Logic:
+ * 1. On init: Clone ALL portfolio items to a master array (detached from DOM)
+ * 2. Current state: Track active filter + pagination offset
+ * 3. On filter change: Filter master array, reset pagination, render first batch
+ * 4. On load more: Render next batch from filtered results
+ * 5. Button state: Compare rendered count vs filtered count (not data-max)
  */
 
-(function($) {
+(function() {
     'use strict';
 
     // Configuration
     const CONFIG = {
-        initialLoad: 8,
-        loadPerClick: 8,
-        itemSelector: '.ms-p-list__item',
-        containerSelector: '.portfolio_wrap',
-        filterSelector: '.filter-nav__item',
-        loadMoreSelector: '.btn-load-more',
-        hiddenClass: 'portfolio-item-hidden',
-        activeClass: 'active',
-        disabledClass: 'btn--disabled'
+        ITEMS_PER_BATCH: 8,
+        CONTAINER_SELECTOR: '.portfolio-feed.ms-p--l',
+        LIST_SELECTOR: '.ms-p-list',
+        ITEM_SELECTOR: '.ms-p-list__item',
+        FILTER_BTN_SELECTOR: '.filter-nav__item',
+        LOAD_MORE_SELECTOR: '.ajax-area--list',
+        ACTIVE_CLASS: 'active',
+        DISABLED_CLASS: 'btn--disabled',
+        TEXT_MAIN_SELECTOR: '.text--main',
+        TEXT_NO_ITEMS_SELECTOR: '.text--no-items'
     };
 
-    // Safe GSAP wrapper - only animate if target exists and GSAP is loaded
-    function safeGsapTo(target, vars) {
-        if (typeof gsap === 'undefined' || !target || !target.length) {
+    // State
+    let masterItems = [];      // All items cloned from DOM on init
+    let filteredItems = [];    // Current filtered subset
+    let currentFilter = 'all'; // Current active filter
+    let renderedCount = 0;     // How many items currently shown
+    let isInitialized = false;
+
+    /**
+     * Initialize the portfolio system
+     */
+    function init() {
+        if (isInitialized) return;
+        
+        const container = document.querySelector(CONFIG.CONTAINER_SELECTOR);
+        if (!container) {
+            console.log('[Portfolio Fix] No portfolio container found');
             return;
         }
-        try {
-            return gsap.to(target, vars);
-        } catch (e) {
-            console.warn('GSAP animation failed:', e);
-        }
-    }
 
-    function safeGsapFromTo(target, fromVars, toVars) {
-        if (typeof gsap === 'undefined' || !target || !target.length) {
+        const list = container.querySelector(CONFIG.LIST_SELECTOR);
+        if (!list) {
+            console.log('[Portfolio Fix] No portfolio list found');
             return;
         }
-        try {
-            return gsap.fromTo(target, fromVars, toVars);
-        } catch (e) {
-            console.warn('GSAP animation failed:', e);
-        }
+
+        // Build master array from ALL items in DOM
+        const items = list.querySelectorAll(CONFIG.ITEM_SELECTOR);
+        masterItems = Array.from(items).map(item => {
+            const clone = item.cloneNode(true);
+            return {
+                element: clone,
+                id: item.id,
+                category: item.getAttribute('data-category') || 'uncategorized'
+            };
+        });
+
+        console.log('[Portfolio Fix] Master array built:', masterItems.length, 'items');
+
+        // Clear the list - we'll control rendering
+        list.innerHTML = '';
+
+        // Set up filter buttons
+        setupFilters(container);
+
+        // Set up load more button
+        setupLoadMore(container);
+
+        // Remove pointer-events restrictions
+        removePointerEventBlocks(container);
+
+        // Initial render (show first batch of all items)
+        applyFilter('all');
+
+        // Remove any conflicting handlers from theme
+        removeConflictingHandlers(container);
+
+        isInitialized = true;
     }
 
-    // Portfolio Load More System
-    function PortfolioLoadMore($container) {
-        this.$container = $container;
-        this.$loadMoreBtn = $container.find(CONFIG.loadMoreSelector).closest('.ajax-area--list');
-        this.$itemsList = $container.find('.ms-p-list');
-        this.$allItems = this.$itemsList.find(CONFIG.itemSelector);
-        this.visibleCount = 0;
-        this.filterValue = 'all';
-        this.isFiltering = false;
+    /**
+     * Set up filter button click handlers
+     */
+    function setupFilters(container) {
+        const filterButtons = container.querySelectorAll(CONFIG.FILTER_BTN_SELECTOR);
         
-        this.init();
-    }
-
-    PortfolioLoadMore.prototype.init = function() {
-        // Get total items count
-        this.totalItems = this.$allItems.length;
-        
-        // Read data-max from HTML (total available items)
-        var maxAttr = this.$loadMoreBtn.attr('data-max');
-        this.maxItems = maxAttr ? parseInt(maxAttr, 10) : this.totalItems;
-        
-        // Show initial items
-        this.resetVisibility();
-        
-        // Bind load more click
-        this.bindLoadMore();
-        
-        // Update button state
-        this.updateButtonState();
-    };
-
-    PortfolioLoadMore.prototype.resetVisibility = function() {
-        this.visibleCount = 0;
-        var self = this;
-        
-        // First, hide all items
-        this.$allItems.each(function() {
-            var $item = $(this);
-            $item.addClass(CONFIG.hiddenClass).hide();
-            $item.attr('data-visible', 'false');
-        });
-        
-        // Then show initial items based on current filter
-        this.showItems(CONFIG.initialLoad);
-    };
-
-    PortfolioLoadMore.prototype.showItems = function(count) {
-        var self = this;
-        var shown = 0;
-        var itemsToShow = [];
-        
-        this.$allItems.each(function() {
-            var $item = $(this);
+        filterButtons.forEach(btn => {
+            // Remove any existing click handlers by cloning
+            const newBtn = btn.cloneNode(true);
+            btn.parentNode.replaceChild(newBtn, btn);
             
-            // Check if item matches current filter
-            if (self.matchesFilter($item)) {
-                if (shown < count && $item.attr('data-visible') !== 'true') {
-                    itemsToShow.push($item);
-                    shown++;
-                }
-            }
-        });
-        
-        // Show the collected items with animation
-        itemsToShow.forEach(function($item) {
-            $item.removeClass(CONFIG.hiddenClass);
-            $item.attr('data-visible', 'true');
-            
-            // Use GSAP if available, otherwise simple show
-            if (typeof gsap !== 'undefined') {
-                $item.show();
-                safeGsapFromTo($item, 
-                    { opacity: 0, y: 20 },
-                    { opacity: 1, y: 0, duration: 0.4, ease: 'power2.out' }
-                );
-            } else {
-                $item.fadeIn(300);
-            }
-        });
-        
-        this.visibleCount += shown;
-        this.updateButtonState();
-    };
-
-    PortfolioLoadMore.prototype.matchesFilter = function($item) {
-        if (this.filterValue === 'all' || !this.filterValue) {
-            return true;
-        }
-        
-        var itemCategory = $item.attr('data-category') || '';
-        return itemCategory.toLowerCase() === this.filterValue.toLowerCase();
-    };
-
-    PortfolioLoadMore.prototype.bindLoadMore = function() {
-        var self = this;
-        
-        // Remove any existing click handlers to prevent duplicates
-        this.$loadMoreBtn.off('click.loadMore');
-        
-        this.$loadMoreBtn.on('click.loadMore', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            
-            // Remove pointer-events limitation
-            $(this).css('pointer-events', 'auto');
-            
-            // Load more items
-            self.showItems(CONFIG.loadPerClick);
-        });
-        
-        // Remove inline pointer-events limitation
-        this.$loadMoreBtn.css('pointer-events', 'auto');
-    };
-
-    PortfolioLoadMore.prototype.updateButtonState = function() {
-        // Count how many items match current filter
-        var matchingItems = 0;
-        var visibleMatching = 0;
-        
-        this.$allItems.each(function() {
-            var $item = $(this);
-            if ($item.attr('data-category') === this.filterValue || this.filterValue === 'all') {
-                matchingItems++;
-                if ($item.attr('data-visible') === 'true') {
-                    visibleMatching++;
-                }
-            }
-        }.bind(this));
-        
-        // Disable button if all matching items are visible
-        if (visibleMatching >= matchingItems || this.visibleCount >= this.maxItems) {
-            this.$loadMoreBtn.addClass(CONFIG.disabledClass);
-            this.$loadMoreBtn.find('.text--main').hide();
-            this.$loadMoreBtn.find('.text--no-items').show();
-            this.$loadMoreBtn.off('click.loadMore');
-        } else {
-            this.$loadMoreBtn.removeClass(CONFIG.disabledClass);
-            this.$loadMoreBtn.find('.text--main').show();
-            this.$loadMoreBtn.find('.text--no-items').hide();
-        }
-    };
-
-    PortfolioLoadMore.prototype.setFilter = function(filterValue) {
-        this.filterValue = filterValue || 'all';
-        
-        // Reset and show initial items for this filter
-        this.resetVisibility();
-    };
-
-    // Portfolio Filter System
-    function initPortfolioFilter() {
-        var $portfolioWraps = $(CONFIG.containerSelector);
-        
-        if (!$portfolioWraps.length) return;
-        
-        $portfolioWraps.each(function() {
-            var $container = $(this);
-            var loadMore = new PortfolioLoadMore($container);
-            
-            // Override filter clicks - prevent AJAX, use frontend filtering
-            $container.off('click.staticFilter').on('click.staticFilter', '.filter-nav__item:not(.active)', function(e) {
+            // Add our handler
+            newBtn.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
                 
-                var $this = $(this);
-                var filterValue = $this.attr('data-filter') || 'all';
+                const filterValue = this.getAttribute('data-filter') || 'all';
                 
-                // Update active state
-                $container.find('.filter-nav__item').removeClass(CONFIG.activeClass);
-                $this.addClass(CONFIG.activeClass);
+                // Update active states
+                container.querySelectorAll(CONFIG.FILTER_BTN_SELECTOR).forEach(b => {
+                    b.classList.remove(CONFIG.ACTIVE_CLASS);
+                });
+                this.classList.add(CONFIG.ACTIVE_CLASS);
                 
-                // Update ARIA
-                $container.find('.filtr-btn li .subnav__link').attr('aria-current', 'none');
-                $this.find('.subnav__link').attr('aria-current', 'page');
-                
-                // Remove pointer-events limitations
-                $container.find('.filtr-btn li').css('pointer-events', 'auto');
-                $container.find(CONFIG.itemSelector).css('pointer-events', 'auto');
-                
-                // Apply filter to Load More system
-                loadMore.setFilter(filterValue);
-                
-                return false;
+                // Apply filter
+                applyFilter(filterValue);
             });
-            
-            // Remove inline pointer-events limitations on items
-            $container.find('.filtr-btn li').css('pointer-events', 'auto');
-            $container.find(CONFIG.itemSelector).css('pointer-events', 'auto');
         });
     }
 
-    // Detect available categories dynamically
-    function detectCategories() {
-        var categories = new Set();
-        var $items = $(CONFIG.itemSelector);
+    /**
+     * Apply a filter and reset pagination
+     */
+    function applyFilter(filterValue) {
+        currentFilter = filterValue.toLowerCase();
         
-        $items.each(function() {
-            var category = $(this).attr('data-category');
-            if (category) {
-                categories.add(category);
+        // Filter from master array
+        if (currentFilter === 'all' || !currentFilter) {
+            filteredItems = [...masterItems];
+        } else {
+            filteredItems = masterItems.filter(item => {
+                return item.category.toLowerCase() === currentFilter;
+            });
+        }
+        
+        console.log('[Portfolio Fix] Filter applied:', currentFilter, '-', filteredItems.length, 'items');
+        
+        // Reset pagination
+        renderedCount = 0;
+        
+        // Clear the list
+        const container = document.querySelector(CONFIG.CONTAINER_SELECTOR);
+        const list = container.querySelector(CONFIG.LIST_SELECTOR);
+        list.innerHTML = '';
+        
+        // Render first batch
+        renderNextBatch();
+    }
+
+    /**
+     * Render next batch of items
+     */
+    function renderNextBatch() {
+        const container = document.querySelector(CONFIG.CONTAINER_SELECTOR);
+        const list = container.querySelector(CONFIG.LIST_SELECTOR);
+        const loadMoreBtn = container.querySelector(CONFIG.LOAD_MORE_SELECTOR);
+        
+        // Calculate items to render
+        const startIndex = renderedCount;
+        const endIndex = Math.min(startIndex + CONFIG.ITEMS_PER_BATCH, filteredItems.length);
+        const itemsToRender = filteredItems.slice(startIndex, endIndex);
+        
+        console.log('[Portfolio Fix] Rendering batch:', startIndex, 'to', endIndex, '-', itemsToRender.length, 'items');
+        
+        // Append items to DOM
+        itemsToRender.forEach(item => {
+            // Clone again for DOM insertion (preserves our master copy)
+            const domItem = item.element.cloneNode(true);
+            domItem.style.display = 'list-item';
+            domItem.style.opacity = '0';
+            list.appendChild(domItem);
+            
+            // Simple fade-in animation (no GSAP dependency)
+            requestAnimationFrame(() => {
+                domItem.style.transition = 'opacity 0.3s ease';
+                domItem.style.opacity = '1';
+            });
+        });
+        
+        // Update rendered count
+        renderedCount = endIndex;
+        
+        // Update load more button state
+        updateLoadMoreButton(loadMoreBtn);
+        
+        // Sync hover images
+        syncHoverImages(container);
+    }
+
+    /**
+     * Update load more button visibility and state
+     */
+    function updateLoadMoreButton(btn) {
+        if (!btn) return;
+        
+        const hasMore = renderedCount < filteredItems.length;
+        
+        console.log('[Portfolio Fix] Load more state:', renderedCount, 'of', filteredItems.length, '- hasMore:', hasMore);
+        
+        const textMain = btn.querySelector(CONFIG.TEXT_MAIN_SELECTOR);
+        const textNoItems = btn.querySelector(CONFIG.TEXT_NO_ITEMS_SELECTOR);
+        
+        if (hasMore) {
+            // More items available
+            btn.classList.remove(CONFIG.DISABLED_CLASS);
+            if (textMain) textMain.style.display = '';
+            if (textNoItems) textNoItems.style.display = 'none';
+        } else {
+            // No more items
+            btn.classList.add(CONFIG.DISABLED_CLASS);
+            if (textMain) textMain.style.display = 'none';
+            if (textNoItems) textNoItems.style.display = '';
+        }
+    }
+
+    /**
+     * Set up load more button handler
+     */
+    function setupLoadMore(container) {
+        const loadMoreBtn = container.querySelector(CONFIG.LOAD_MORE_SELECTOR);
+        if (!loadMoreBtn) return;
+        
+        // Remove any existing handlers by cloning
+        const newBtn = loadMoreBtn.cloneNode(true);
+        loadMoreBtn.parentNode.replaceChild(newBtn, loadMoreBtn);
+        
+        // Add our handler
+        newBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            // Only load if we have more items
+            if (renderedCount < filteredItems.length) {
+                renderNextBatch();
             }
         });
         
-        return Array.from(categories);
+        // Remove inline pointer-events restriction
+        newBtn.style.pointerEvents = 'auto';
     }
 
-    // Safe GSAP for existing animations
-    function patchExistingAnimations() {
-        if (typeof gsap === 'undefined') return;
+    /**
+     * Sync hover preview images with visible items
+     */
+    function syncHoverImages(container) {
+        const aside = container.querySelector('.ms-p-list__aside-wrap');
+        if (!aside) return;
         
-        // Patch common GSAP calls to check targets first
-        var originalTo = gsap.to;
-        var originalFromTo = gsap.fromTo;
+        // Get IDs of currently visible items
+        const list = container.querySelector(CONFIG.LIST_SELECTOR);
+        const visibleItems = list.querySelectorAll(CONFIG.ITEM_SELECTOR);
+        const visibleIds = Array.from(visibleItems).map(item => item.id);
         
-        if (originalTo) {
-            gsap.to = function(target, vars) {
-                if (!target || (typeof target === 'object' && !target.length && !(target instanceof Element))) {
-                    return Promise.resolve();
-                }
-                return originalTo.apply(this, arguments);
-            };
-        }
-        
-        if (originalFromTo) {
-            gsap.fromTo = function(target, fromVars, toVars) {
-                if (!target || (typeof target === 'object' && !target.length && !(target instanceof Element))) {
-                    return Promise.resolve();
-                }
-                return originalFromTo.apply(this, arguments);
-            };
-        }
+        // Show/hide corresponding images
+        const images = aside.querySelectorAll('figure.ms-p-list__img');
+        images.forEach(img => {
+            const imgId = img.getAttribute('data-id');
+            if (visibleIds.includes(imgId)) {
+                img.style.display = '';
+            } else {
+                img.style.display = 'none';
+            }
+        });
     }
 
-    // Override the original AJAX filter function
-    function overrideAjaxFilter() {
-        // Wait for app.min.js to load, then override
-        if (typeof $ !== 'undefined') {
-            $(document).ready(function() {
-                // Wait a bit for app.min.js to initialize
-                setTimeout(function() {
-                    // Remove any existing click handlers from app.min.js
-                    $('.portfolio_wrap').off('click', '.filter-nav__item:not(.active)');
-                    
-                    // Initialize our filter
-                    initPortfolioFilter();
-                    
-                    // Patch GSAP
-                    patchExistingAnimations();
-                    
-                    // Log detected categories for debugging
-                    var categories = detectCategories();
-                    console.log('[Static Fix] Detected categories:', categories);
-                }, 100);
-            });
+    /**
+     * Remove pointer-events CSS blocks
+     */
+    function removePointerEventBlocks(container) {
+        // Remove from filter buttons
+        container.querySelectorAll('.filtr-btn li').forEach(el => {
+            el.style.pointerEvents = 'auto';
+        });
+        
+        // Remove from items
+        container.querySelectorAll(CONFIG.ITEM_SELECTOR).forEach(el => {
+            el.style.pointerEvents = 'auto';
+        });
+    }
+
+    /**
+     * Remove conflicting handlers from theme JS
+     */
+    function removeConflictingHandlers(container) {
+        // Stop any ongoing AJAX by hiding loader
+        const loader = container.querySelector('.load_filter');
+        if (loader) {
+            loader.style.display = 'none';
+        }
+        
+        // Override any global functions that might interfere
+        if (typeof window.jQuery !== 'undefined') {
+            // Remove jQuery handlers from our elements
+            const $ = window.jQuery;
+            $(CONFIG.CONTAINER_SELECTOR).off('click', '.filter-nav__item');
+            $(CONFIG.CONTAINER_SELECTOR).off('click', '.ajax-area--list');
         }
     }
 
     // Initialize when DOM is ready
-    if (typeof $ !== 'undefined') {
-        overrideAjaxFilter();
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
     } else {
-        // Fallback if jQuery not loaded yet
-        document.addEventListener('DOMContentLoaded', function() {
-            setTimeout(overrideAjaxFilter, 200);
-        });
+        // DOM already loaded, but wait for other scripts
+        setTimeout(init, 100);
     }
 
-})(window.jQuery);
+    // Also try on window load as backup
+    window.addEventListener('load', function() {
+        if (!isInitialized) {
+            init();
+        }
+    });
+
+})();
