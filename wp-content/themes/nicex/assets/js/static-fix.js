@@ -17,7 +17,7 @@
         LIST_SELECTOR: '.ms-p-list',
         ITEM_SELECTOR: '.ms-p-list__item',
         FILTER_BTN_SELECTOR: '.filter-nav__item',
-        LOAD_MORE_SELECTOR: '.ajax-area--list',
+        LOAD_MORE_SELECTOR: '.ajax-area--list, .btn-load-more',
         ACTIVE_CLASS: 'active',
         DISABLED_CLASS: 'btn--disabled'
     };
@@ -58,6 +58,7 @@
         $(document).off('click', '.ajax-area--list');
         $(document).off('click', '.btn-load-more');
         $(CONFIG.CONTAINER_SELECTOR).off();
+        $('.btn-load-more').off(); // Also remove from the button itself
     }
 
     // IMMEDIATE: Global click interceptor - runs BEFORE jQuery delegated handlers
