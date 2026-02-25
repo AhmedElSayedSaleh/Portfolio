@@ -275,15 +275,34 @@ document.addEventListener('click', function(e) {
     }
 
     /**
-     * Setup Load More button - now mainly for visual/aria updates
+     * Setup Load More button - replace completely to remove all handlers
      */
     function setupLoadMoreButton(container) {
-        const btn = container.querySelector(CONFIG.LOAD_MORE_SELECTOR);
+        let btn = container.querySelector(CONFIG.LOAD_MORE_SELECTOR);
         if (!btn) return;
         
-        // Just ensure visual state
-        btn.style.pointerEvents = 'auto';
-        btn.style.cursor = 'pointer';
+        // Clone and replace to remove ALL jQuery handlers
+        const parent = btn.parentNode;
+        const newBtn = cleanClone(btn);
+        parent.replaceChild(newBtn, btn);
+        
+        // Now attach our handler directly
+        newBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            console.log('[Portfolio Fix] Load More clicked via direct handler');
+            
+            if (renderedCount < filteredItems.length) {
+                const list = container.querySelector(CONFIG.LIST_SELECTOR);
+                renderBatch(container, list);
+            }
+        });
+        
+        newBtn.style.pointerEvents = 'auto';
+        newBtn.style.cursor = 'pointer';
+        
+        console.log('[Portfolio Fix] Load More button replaced and handler attached');
     }
 
     function updateButtonState(container) {
