@@ -60,9 +60,12 @@
         $(CONFIG.CONTAINER_SELECTOR).off();
     }
 
-    // IMMEDIATE: Global click interceptor - attach to window to catch events before document
+    // IMMEDIATE: Global click interceptor - runs BEFORE jQuery delegated handlers
 document.addEventListener('click', function(e) {
     const target = e.target;
+    
+    // Debug: log all clicks to see what's happening
+    console.log('[Portfolio Fix] Click detected on:', target.tagName, target.className);
     
     // Check if click is on filter button or load more within portfolio
     const filterBtn = target.closest('.filter-nav__item');
