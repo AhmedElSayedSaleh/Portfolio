@@ -1,11 +1,11 @@
 /**
- * Portfolio Static Fix - Aggressive Override
+ * Portfolio Static Fix - Immediate Override
  * 
  * Strategy:
- * 1. Intercept clicks at document level (capturing phase) to block theme AJAX
- * 2. Clone and replace all interactive elements to remove jQuery handlers
- * 3. Maintain master list, filter, paginate
- * 4. Disable any global AJAX functions for portfolio
+ * 1. Run interceptor IMMEDIATELY on script load (before jQuery ready)
+ * 2. Override global infinity_load to disable theme pagination
+ * 3. Block jQuery AJAX for portfolio URLs
+ * 4. Maintain master list, filter, paginate
  */
 
 (function() {
@@ -26,75 +26,76 @@
     let filteredItems = [];
     let renderedCount = 0;
     let isInitialized = false;
+    let pendingFilter = null;
+    let pendingLoadMore = false;
 
-    /**
-     * Block all theme AJAX before it happens
-     */
-    function blockThemeAjax() {
-        // Override jQuery AJAX for portfolio URLs
-        if (typeof window.jQuery !== 'undefined') {
-            const $ = window.jQuery;
-            const originalAjax = $.ajax;
-            
-            $.ajax = function(options) {
-                const url = options.url || '';
-                // Block AJAX to portfolio pagination URLs
-                if (url.includes('/portfolio/page/') || url.includes('simply_static_page')) {
-                    console.log('[Portfolio Fix] Blocked AJAX:', url);
-                    // Return resolved promise to prevent errors
-                    return $.Deferred().resolve().promise();
-                }
-                return originalAjax.apply(this, arguments);
-            };
-            
-            // Also block any handlers on the container
-            $(CONFIG.CONTAINER_SELECTOR).off();
-            $(document).off('click', '.filter-nav__item');
-            $(document).off('click', '.ajax-area--list');
-            $(document).off('click', '.btn-load-more');
-            
-            // Remove all click handlers from portfolio elements
-            $('.filter-nav__item').off('click');
-            $('.ajax-area--list').off('click');
-            $('.btn-load-more').off('click');
-        }
+    // IMMEDIATE: Disable theme's infinity_load global
+    if (typeof window.infinity_load !== 'undefined') {
+        window.infinity_load.maxPages = 1;
+        window.infinity_load.nextLink = '';
+        console.log('[Portfolio Fix] Disabled infinity_load');
     }
     
-    /**
-     * Global click interceptor - runs before all other handlers
-     */
-    function setupGlobalInterceptor() {
-        document.addEventListener('click', function(e) {
-            const target = e.target;
-            
-            // Check if click is on filter button or load more within portfolio
-            const filterBtn = target.closest('.filter-nav__item');
-            const loadMore = target.closest('.ajax-area--list');
-            const inPortfolio = target.closest(CONFIG.CONTAINER_SELECTOR);
-            
-            if (inPortfolio && (filterBtn || loadMore)) {
-                console.log('[Portfolio Fix] Intercepted click on', filterBtn ? 'filter' : 'load more');
-                e.stopImmediatePropagation();
-                e.preventDefault();
-                
-                // Handle it ourselves
-                if (filterBtn && !filterBtn.classList.contains(CONFIG.ACTIVE_CLASS)) {
-                    const filterValue = filterBtn.getAttribute('data-filter') || 'all';
-                    
-                    // Update active states
-                    inPortfolio.querySelectorAll(CONFIG.FILTER_BTN_SELECTOR).forEach(b => {
-                        b.classList.remove(CONFIG.ACTIVE_CLASS);
-                    });
-                    filterBtn.classList.add(CONFIG.ACTIVE_CLASS);
-                    
-                    applyFilter(filterValue);
-                } else if (loadMore && renderedCount < filteredItems.length) {
-                    const list = inPortfolio.querySelector(CONFIG.LIST_SELECTOR);
-                    renderBatch(inPortfolio, list);
-                }
+    // IMMEDIATE: Override jQuery AJAX before DOM ready
+    if (typeof window.jQuery !== 'undefined') {
+        const $ = window.jQuery;
+        const originalAjax = $.ajax;
+        
+        $.ajax = function(options) {
+            const url = options.url || '';
+            if (url.includes('/portfolio/page/') || url.includes('simply_static_page')) {
+                console.log('[Portfolio Fix] Blocked AJAX:', url);
+                return $.Deferred().resolve().promise();
             }
-        }, true); // Capture phase - runs before bubbling
+            return originalAjax.apply(this, arguments);
+        };
+        
+        // Remove any existing delegated handlers
+        $(document).off('click', '.filter-nav__item');
+        $(document).off('click', '.ajax-area--list');
     }
+
+    // IMMEDIATE: Global click interceptor (runs before all other handlers)
+    document.addEventListener('click', function(e) {
+        const target = e.target;
+        
+        // Check if click is on filter button or load more within portfolio
+        const filterBtn = target.closest('.filter-nav__item');
+        const loadMore = target.closest('.ajax-area--list');
+        const inPortfolio = target.closest(CONFIG.CONTAINER_SELECTOR);
+        
+        if (inPortfolio && (filterBtn || loadMore)) {
+            console.log('[Portfolio Fix] Intercepted click on', filterBtn ? 'filter' : 'load more');
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            
+            if (!isInitialized) {
+                // Queue action for after init
+                if (filterBtn) pendingFilter = filterBtn.getAttribute('data-filter') || 'all';
+                if (loadMore) pendingLoadMore = true;
+                console.log('[Portfolio Fix] Action queued, not initialized yet');
+                return;
+            }
+            
+            // Handle it ourselves
+            if (filterBtn && !filterBtn.classList.contains(CONFIG.ACTIVE_CLASS)) {
+                const filterValue = filterBtn.getAttribute('data-filter') || 'all';
+                
+                // Update active states
+                inPortfolio.querySelectorAll(CONFIG.FILTER_BTN_SELECTOR).forEach(b => {
+                    b.classList.remove(CONFIG.ACTIVE_CLASS);
+                });
+                filterBtn.classList.add(CONFIG.ACTIVE_CLASS);
+                
+                applyFilter(filterValue);
+            } else if (loadMore && renderedCount < filteredItems.length) {
+                const list = inPortfolio.querySelector(CONFIG.LIST_SELECTOR);
+                renderBatch(inPortfolio, list);
+            }
+            
+            return false;
+        }
+    }, true); // Capture phase - runs before bubbling
 
     /**
      * Clean clone - removes all event handlers
@@ -124,11 +125,8 @@
             return;
         }
 
-        // Block AJAX immediately
-        blockThemeAjax();
-        
-        // Set up global click interceptor FIRST (before any other handlers)
-        setupGlobalInterceptor();
+        // Block AJAX and setup interceptor immediately on load
+        // (already done at top of file)
 
         // Get all items from DOM
         const items = Array.from(list.querySelectorAll(CONFIG.ITEM_SELECTOR));
@@ -176,6 +174,19 @@
         // Hide loader
         const loader = container.querySelector('.load_filter');
         if (loader) loader.style.display = 'none';
+
+        // Process any pending actions from before init
+        if (pendingFilter) {
+            console.log('[Portfolio Fix] Processing pending filter:', pendingFilter);
+            applyFilter(pendingFilter);
+            pendingFilter = null;
+        }
+        if (pendingLoadMore) {
+            console.log('[Portfolio Fix] Processing pending load more');
+            const list = container.querySelector(CONFIG.LIST_SELECTOR);
+            renderBatch(container, list);
+            pendingLoadMore = false;
+        }
 
         isInitialized = true;
         console.log('[Portfolio Fix] Initialized successfully');
