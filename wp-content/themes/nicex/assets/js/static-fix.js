@@ -275,34 +275,41 @@ document.addEventListener('click', function(e) {
     }
 
     /**
-     * Setup Load More button - replace completely to remove all handlers
+     * Setup Load More button - nuclear option: disable jQuery events
      */
     function setupLoadMoreButton(container) {
         let btn = container.querySelector(CONFIG.LOAD_MORE_SELECTOR);
         if (!btn) return;
         
-        // Clone and replace to remove ALL jQuery handlers
+        // Nuclear: Disable jQuery events on this element
+        if (typeof window.jQuery !== 'undefined') {
+            const $ = window.jQuery;
+            $(btn).off(); // Remove all jQuery events
+            $(btn).removeData(); // Remove jQuery data
+        }
+        
+        // Clone and replace to remove ALL handlers
         const parent = btn.parentNode;
         const newBtn = cleanClone(btn);
         parent.replaceChild(newBtn, btn);
         
-        // Now attach our handler directly
+        // Add our handler with capture to run before jQuery
         newBtn.addEventListener('click', function(e) {
-            e.preventDefault();
+            console.log('[Portfolio Fix] Load More clicked via CAPTURE handler');
+            e.stopImmediatePropagation();
             e.stopPropagation();
-            
-            console.log('[Portfolio Fix] Load More clicked via direct handler');
+            e.preventDefault();
             
             if (renderedCount < filteredItems.length) {
                 const list = container.querySelector(CONFIG.LIST_SELECTOR);
                 renderBatch(container, list);
             }
-        });
+        }, true); // Capture phase
         
         newBtn.style.pointerEvents = 'auto';
         newBtn.style.cursor = 'pointer';
         
-        console.log('[Portfolio Fix] Load More button replaced and handler attached');
+        console.log('[Portfolio Fix] Load More button replaced with capture handler');
     }
 
     function updateButtonState(container) {
