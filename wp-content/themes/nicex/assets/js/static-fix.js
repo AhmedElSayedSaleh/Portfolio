@@ -64,12 +64,10 @@
 document.addEventListener('click', function(e) {
     const target = e.target;
     
-    // Debug: log all clicks to see what's happening
-    console.log('[Portfolio Fix] Click detected on:', target.tagName, target.className);
-    
     // Check if click is on filter button or load more within portfolio
+    // Use broader selectors to catch clicks on child elements too
     const filterBtn = target.closest('.filter-nav__item');
-    const loadMore = target.closest('.ajax-area--list');
+    const loadMore = target.closest('.ajax-area--list, .btn-load-more, .ms-btn--ripple');
     const inPortfolio = target.closest(CONFIG.CONTAINER_SELECTOR);
     
     if (inPortfolio && (filterBtn || loadMore)) {
