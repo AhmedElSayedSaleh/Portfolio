@@ -58,20 +58,42 @@
             $('.ajax-area--list').off('click');
             $('.btn-load-more').off('click');
         }
-        
-        // Add capturing event listener to intercept clicks before bubbling
+    }
+    
+    /**
+     * Global click interceptor - runs before all other handlers
+     */
+    function setupGlobalInterceptor() {
         document.addEventListener('click', function(e) {
             const target = e.target;
             
-            // Check if click is on filter button or load more
-            if (target.closest('.filter-nav__item') || target.closest('.ajax-area--list')) {
-                // Check if we're in portfolio area
-                if (target.closest(CONFIG.CONTAINER_SELECTOR)) {
-                    e.stopImmediatePropagation();
-                    // Let our handler deal with it
+            // Check if click is on filter button or load more within portfolio
+            const filterBtn = target.closest('.filter-nav__item');
+            const loadMore = target.closest('.ajax-area--list');
+            const inPortfolio = target.closest(CONFIG.CONTAINER_SELECTOR);
+            
+            if (inPortfolio && (filterBtn || loadMore)) {
+                console.log('[Portfolio Fix] Intercepted click on', filterBtn ? 'filter' : 'load more');
+                e.stopImmediatePropagation();
+                e.preventDefault();
+                
+                // Handle it ourselves
+                if (filterBtn && !filterBtn.classList.contains(CONFIG.ACTIVE_CLASS)) {
+                    const filterValue = filterBtn.getAttribute('data-filter') || 'all';
+                    
+                    // Update active states
+                    inPortfolio.querySelectorAll(CONFIG.FILTER_BTN_SELECTOR).forEach(b => {
+                        b.classList.remove(CONFIG.ACTIVE_CLASS);
+                    });
+                    filterBtn.classList.add(CONFIG.ACTIVE_CLASS);
+                    
+                    applyFilter(filterValue);
+                } else if (loadMore && renderedCount < filteredItems.length) {
+                    const list = inPortfolio.querySelector(CONFIG.LIST_SELECTOR);
+                    renderBatch(inPortfolio, list);
                 }
             }
-        }, true); // Capturing phase
+        }, true); // Capture phase - runs before bubbling
     }
 
     /**
@@ -104,6 +126,9 @@
 
         // Block AJAX immediately
         blockThemeAjax();
+        
+        // Set up global click interceptor FIRST (before any other handlers)
+        setupGlobalInterceptor();
 
         // Get all items from DOM
         const items = Array.from(list.querySelectorAll(CONFIG.ITEM_SELECTOR));
@@ -141,9 +166,9 @@
             loadMoreOriginal.parentNode.replaceChild(cleanLoadMore, loadMoreOriginal);
         }
 
-        // Set up handlers
+        // Set up handlers (these are now secondary to global interceptor)
         setupFilterHandlers(container);
-        setupLoadMoreHandler(container);
+        setupLoadMoreButton(container);
 
         // Show initial items
         applyFilter('all');
@@ -223,35 +248,16 @@
         syncHoverImages(container);
     }
 
-    function setupLoadMoreHandler(container) {
+    /**
+     * Setup Load More button - now mainly for visual/aria updates
+     */
+    function setupLoadMoreButton(container) {
         const btn = container.querySelector(CONFIG.LOAD_MORE_SELECTOR);
         if (!btn) return;
         
-        // Aggressively remove any existing listeners by replacing element
-        const parent = btn.parentNode;
-        const newBtn = cleanClone(btn);
-        parent.replaceChild(newBtn, btn);
-        
-        // Add our handler with capture to ensure it runs first
-        newBtn.addEventListener('click', function(e) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            e.stopPropagation();
-            
-            console.log('[Portfolio Fix] Load More clicked, rendered:', renderedCount, 'of', filteredItems.length);
-            
-            if (renderedCount < filteredItems.length) {
-                const list = container.querySelector(CONFIG.LIST_SELECTOR);
-                renderBatch(container, list);
-            } else {
-                console.log('[Portfolio Fix] No more items to load');
-            }
-            
-            return false;
-        }, true); // Use capture phase
-        
-        newBtn.style.pointerEvents = 'auto';
-        newBtn.style.cursor = 'pointer';
+        // Just ensure visual state
+        btn.style.pointerEvents = 'auto';
+        btn.style.cursor = 'pointer';
     }
 
     function updateButtonState(container) {
