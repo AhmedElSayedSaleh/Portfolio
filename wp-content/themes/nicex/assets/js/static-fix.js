@@ -43,7 +43,8 @@
         
         $.ajax = function(options) {
             const url = options.url || '';
-            if (url.includes('/portfolio/page/') || url.includes('simply_static_page')) {
+            // Block ALL portfolio-related AJAX
+            if (url.includes('/portfolio/') || url.includes('simply_static_page')) {
                 console.log('[Portfolio Fix] Blocked AJAX:', url);
                 return $.Deferred().resolve().promise();
             }
