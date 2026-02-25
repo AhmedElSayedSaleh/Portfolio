@@ -51,6 +51,12 @@
             $(CONFIG.CONTAINER_SELECTOR).off();
             $(document).off('click', '.filter-nav__item');
             $(document).off('click', '.ajax-area--list');
+            $(document).off('click', '.btn-load-more');
+            
+            // Remove all click handlers from portfolio elements
+            $('.filter-nav__item').off('click');
+            $('.ajax-area--list').off('click');
+            $('.btn-load-more').off('click');
         }
         
         // Add capturing event listener to intercept clicks before bubbling
@@ -221,19 +227,31 @@
         const btn = container.querySelector(CONFIG.LOAD_MORE_SELECTOR);
         if (!btn) return;
         
-        btn.addEventListener('click', function(e) {
+        // Aggressively remove any existing listeners by replacing element
+        const parent = btn.parentNode;
+        const newBtn = cleanClone(btn);
+        parent.replaceChild(newBtn, btn);
+        
+        // Add our handler with capture to ensure it runs first
+        newBtn.addEventListener('click', function(e) {
             e.preventDefault();
+            e.stopImmediatePropagation();
             e.stopPropagation();
             
-            console.log('[Portfolio Fix] Load More clicked');
+            console.log('[Portfolio Fix] Load More clicked, rendered:', renderedCount, 'of', filteredItems.length);
             
             if (renderedCount < filteredItems.length) {
                 const list = container.querySelector(CONFIG.LIST_SELECTOR);
                 renderBatch(container, list);
+            } else {
+                console.log('[Portfolio Fix] No more items to load');
             }
-        });
+            
+            return false;
+        }, true); // Use capture phase
         
-        btn.style.pointerEvents = 'auto';
+        newBtn.style.pointerEvents = 'auto';
+        newBtn.style.cursor = 'pointer';
     }
 
     function updateButtonState(container) {
