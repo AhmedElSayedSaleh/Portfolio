@@ -1,18 +1,16 @@
 /**
- * Portfolio Static Fix - Clean Vanilla JS Implementation
+ * Portfolio Static Fix - Aggressive Override
  * 
- * Logic:
- * 1. On init: Clone ALL portfolio items to a master array (detached from DOM)
- * 2. Current state: Track active filter + pagination offset
- * 3. On filter change: Filter master array, reset pagination, render first batch
- * 4. On load more: Render next batch from filtered results
- * 5. Button state: Compare rendered count vs filtered count (not data-max)
+ * Strategy:
+ * 1. Intercept clicks at document level (capturing phase) to block theme AJAX
+ * 2. Clone and replace all interactive elements to remove jQuery handlers
+ * 3. Maintain master list, filter, paginate
+ * 4. Disable any global AJAX functions for portfolio
  */
 
 (function() {
     'use strict';
 
-    // Configuration
     const CONFIG = {
         ITEMS_PER_BATCH: 8,
         CONTAINER_SELECTOR: '.portfolio-feed.ms-p--l',
@@ -21,292 +19,267 @@
         FILTER_BTN_SELECTOR: '.filter-nav__item',
         LOAD_MORE_SELECTOR: '.ajax-area--list',
         ACTIVE_CLASS: 'active',
-        DISABLED_CLASS: 'btn--disabled',
-        TEXT_MAIN_SELECTOR: '.text--main',
-        TEXT_NO_ITEMS_SELECTOR: '.text--no-items'
+        DISABLED_CLASS: 'btn--disabled'
     };
 
-    // State
-    let masterItems = [];      // All items cloned from DOM on init
-    let filteredItems = [];    // Current filtered subset
-    let currentFilter = 'all'; // Current active filter
-    let renderedCount = 0;     // How many items currently shown
+    let masterItems = [];
+    let filteredItems = [];
+    let renderedCount = 0;
     let isInitialized = false;
 
     /**
-     * Initialize the portfolio system
+     * Block all theme AJAX before it happens
      */
+    function blockThemeAjax() {
+        // Override jQuery AJAX for portfolio URLs
+        if (typeof window.jQuery !== 'undefined') {
+            const $ = window.jQuery;
+            const originalAjax = $.ajax;
+            
+            $.ajax = function(options) {
+                const url = options.url || '';
+                // Block AJAX to portfolio pagination URLs
+                if (url.includes('/portfolio/page/') || url.includes('simply_static_page')) {
+                    console.log('[Portfolio Fix] Blocked AJAX:', url);
+                    // Return resolved promise to prevent errors
+                    return $.Deferred().resolve().promise();
+                }
+                return originalAjax.apply(this, arguments);
+            };
+            
+            // Also block any handlers on the container
+            $(CONFIG.CONTAINER_SELECTOR).off();
+            $(document).off('click', '.filter-nav__item');
+            $(document).off('click', '.ajax-area--list');
+        }
+        
+        // Add capturing event listener to intercept clicks before bubbling
+        document.addEventListener('click', function(e) {
+            const target = e.target;
+            
+            // Check if click is on filter button or load more
+            if (target.closest('.filter-nav__item') || target.closest('.ajax-area--list')) {
+                // Check if we're in portfolio area
+                if (target.closest(CONFIG.CONTAINER_SELECTOR)) {
+                    e.stopImmediatePropagation();
+                    // Let our handler deal with it
+                }
+            }
+        }, true); // Capturing phase
+    }
+
+    /**
+     * Clean clone - removes all event handlers
+     */
+    function cleanClone(element) {
+        const clone = element.cloneNode(true);
+        // Remove any jQuery data attributes that might hold handlers
+        clone.removeAttribute('data-events');
+        return clone;
+    }
+
     function init() {
-        if (isInitialized) return;
+        if (isInitialized) {
+            console.log('[Portfolio Fix] Already initialized');
+            return;
+        }
         
         const container = document.querySelector(CONFIG.CONTAINER_SELECTOR);
         if (!container) {
-            console.log('[Portfolio Fix] No portfolio container found');
+            console.log('[Portfolio Fix] No portfolio container');
             return;
         }
 
         const list = container.querySelector(CONFIG.LIST_SELECTOR);
         if (!list) {
-            console.log('[Portfolio Fix] No portfolio list found');
+            console.log('[Portfolio Fix] No portfolio list');
             return;
         }
 
-        // Build master array from ALL items in DOM
-        const items = list.querySelectorAll(CONFIG.ITEM_SELECTOR);
-        masterItems = Array.from(items).map(item => {
-            const clone = item.cloneNode(true);
+        // Block AJAX immediately
+        blockThemeAjax();
+
+        // Get all items from DOM
+        const items = Array.from(list.querySelectorAll(CONFIG.ITEM_SELECTOR));
+        console.log('[Portfolio Fix] Found', items.length, 'items in DOM');
+
+        // Build master array
+        masterItems = items.map(item => {
             return {
-                element: clone,
+                element: cleanClone(item),
                 id: item.id,
-                category: item.getAttribute('data-category') || 'uncategorized'
+                category: (item.getAttribute('data-category') || 'uncategorized').toLowerCase()
             };
         });
 
-        console.log('[Portfolio Fix] Master array built:', masterItems.length, 'items');
+        console.log('[Portfolio Fix] Master array:', masterItems.length, 'items');
+        console.log('[Portfolio Fix] Categories:', masterItems.map(i => i.category));
 
-        // Clear the list - we'll control rendering
+        // Clear list completely
         list.innerHTML = '';
 
-        // Set up filter buttons
-        setupFilters(container);
+        // Replace filter buttons with clean clones
+        const filterNav = container.querySelector('.filtr-btn');
+        if (filterNav) {
+            const buttons = filterNav.querySelectorAll(CONFIG.FILTER_BTN_SELECTOR);
+            buttons.forEach(btn => {
+                const cleanBtn = cleanClone(btn);
+                btn.parentNode.replaceChild(cleanBtn, btn);
+            });
+        }
 
-        // Set up load more button
-        setupLoadMore(container);
+        // Replace load more with clean clone
+        const loadMoreOriginal = container.querySelector(CONFIG.LOAD_MORE_SELECTOR);
+        if (loadMoreOriginal) {
+            const cleanLoadMore = cleanClone(loadMoreOriginal);
+            loadMoreOriginal.parentNode.replaceChild(cleanLoadMore, loadMoreOriginal);
+        }
 
-        // Remove pointer-events restrictions
-        removePointerEventBlocks(container);
+        // Set up handlers
+        setupFilterHandlers(container);
+        setupLoadMoreHandler(container);
 
-        // Initial render (show first batch of all items)
+        // Show initial items
         applyFilter('all');
 
-        // Remove any conflicting handlers from theme
-        removeConflictingHandlers(container);
+        // Hide loader
+        const loader = container.querySelector('.load_filter');
+        if (loader) loader.style.display = 'none';
 
         isInitialized = true;
+        console.log('[Portfolio Fix] Initialized successfully');
     }
 
-    /**
-     * Set up filter button click handlers
-     */
-    function setupFilters(container) {
-        const filterButtons = container.querySelectorAll(CONFIG.FILTER_BTN_SELECTOR);
+    function setupFilterHandlers(container) {
+        const buttons = container.querySelectorAll(CONFIG.FILTER_BTN_SELECTOR);
         
-        filterButtons.forEach(btn => {
-            // Remove any existing click handlers by cloning
-            const newBtn = btn.cloneNode(true);
-            btn.parentNode.replaceChild(newBtn, btn);
-            
-            // Add our handler
-            newBtn.addEventListener('click', function(e) {
+        buttons.forEach(btn => {
+            btn.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
                 
                 const filterValue = this.getAttribute('data-filter') || 'all';
+                console.log('[Portfolio Fix] Filter clicked:', filterValue);
                 
-                // Update active states
-                container.querySelectorAll(CONFIG.FILTER_BTN_SELECTOR).forEach(b => {
-                    b.classList.remove(CONFIG.ACTIVE_CLASS);
-                });
+                // Update active class
+                buttons.forEach(b => b.classList.remove(CONFIG.ACTIVE_CLASS));
                 this.classList.add(CONFIG.ACTIVE_CLASS);
                 
-                // Apply filter
                 applyFilter(filterValue);
             });
         });
     }
 
-    /**
-     * Apply a filter and reset pagination
-     */
     function applyFilter(filterValue) {
-        currentFilter = filterValue.toLowerCase();
+        const filter = filterValue.toLowerCase();
         
-        // Filter from master array
-        if (currentFilter === 'all' || !currentFilter) {
+        if (filter === 'all' || !filter) {
             filteredItems = [...masterItems];
         } else {
-            filteredItems = masterItems.filter(item => {
-                return item.category.toLowerCase() === currentFilter;
-            });
+            filteredItems = masterItems.filter(item => item.category === filter);
         }
         
-        console.log('[Portfolio Fix] Filter applied:', currentFilter, '-', filteredItems.length, 'items');
+        console.log('[Portfolio Fix] Filter:', filter, '| Items:', filteredItems.length);
         
-        // Reset pagination
+        // Reset
         renderedCount = 0;
         
-        // Clear the list
+        // Clear and render
         const container = document.querySelector(CONFIG.CONTAINER_SELECTOR);
         const list = container.querySelector(CONFIG.LIST_SELECTOR);
         list.innerHTML = '';
         
-        // Render first batch
-        renderNextBatch();
+        renderBatch(container, list);
     }
 
-    /**
-     * Render next batch of items
-     */
-    function renderNextBatch() {
-        const container = document.querySelector(CONFIG.CONTAINER_SELECTOR);
-        const list = container.querySelector(CONFIG.LIST_SELECTOR);
-        const loadMoreBtn = container.querySelector(CONFIG.LOAD_MORE_SELECTOR);
+    function renderBatch(container, list) {
+        const start = renderedCount;
+        const end = Math.min(start + CONFIG.ITEMS_PER_BATCH, filteredItems.length);
+        const toRender = filteredItems.slice(start, end);
         
-        // Calculate items to render
-        const startIndex = renderedCount;
-        const endIndex = Math.min(startIndex + CONFIG.ITEMS_PER_BATCH, filteredItems.length);
-        const itemsToRender = filteredItems.slice(startIndex, endIndex);
+        console.log('[Portfolio Fix] Rendering', toRender.length, 'items (', start, 'to', end, ')');
         
-        console.log('[Portfolio Fix] Rendering batch:', startIndex, 'to', endIndex, '-', itemsToRender.length, 'items');
-        
-        // Append items to DOM
-        itemsToRender.forEach(item => {
-            // Clone again for DOM insertion (preserves our master copy)
-            const domItem = item.element.cloneNode(true);
-            domItem.style.display = 'list-item';
-            domItem.style.opacity = '0';
-            list.appendChild(domItem);
+        toRender.forEach(item => {
+            const el = item.element.cloneNode(true);
+            el.style.display = 'list-item';
+            el.style.opacity = '0';
+            list.appendChild(el);
             
-            // Simple fade-in animation (no GSAP dependency)
+            // Fade in
             requestAnimationFrame(() => {
-                domItem.style.transition = 'opacity 0.3s ease';
-                domItem.style.opacity = '1';
+                el.style.transition = 'opacity 0.3s';
+                el.style.opacity = '1';
             });
         });
         
-        // Update rendered count
-        renderedCount = endIndex;
-        
-        // Update load more button state
-        updateLoadMoreButton(loadMoreBtn);
-        
-        // Sync hover images
+        renderedCount = end;
+        updateButtonState(container);
         syncHoverImages(container);
     }
 
-    /**
-     * Update load more button visibility and state
-     */
-    function updateLoadMoreButton(btn) {
+    function setupLoadMoreHandler(container) {
+        const btn = container.querySelector(CONFIG.LOAD_MORE_SELECTOR);
         if (!btn) return;
         
-        const hasMore = renderedCount < filteredItems.length;
-        
-        console.log('[Portfolio Fix] Load more state:', renderedCount, 'of', filteredItems.length, '- hasMore:', hasMore);
-        
-        const textMain = btn.querySelector(CONFIG.TEXT_MAIN_SELECTOR);
-        const textNoItems = btn.querySelector(CONFIG.TEXT_NO_ITEMS_SELECTOR);
-        
-        if (hasMore) {
-            // More items available
-            btn.classList.remove(CONFIG.DISABLED_CLASS);
-            if (textMain) textMain.style.display = '';
-            if (textNoItems) textNoItems.style.display = 'none';
-        } else {
-            // No more items
-            btn.classList.add(CONFIG.DISABLED_CLASS);
-            if (textMain) textMain.style.display = 'none';
-            if (textNoItems) textNoItems.style.display = '';
-        }
-    }
-
-    /**
-     * Set up load more button handler
-     */
-    function setupLoadMore(container) {
-        const loadMoreBtn = container.querySelector(CONFIG.LOAD_MORE_SELECTOR);
-        if (!loadMoreBtn) return;
-        
-        // Remove any existing handlers by cloning
-        const newBtn = loadMoreBtn.cloneNode(true);
-        loadMoreBtn.parentNode.replaceChild(newBtn, loadMoreBtn);
-        
-        // Add our handler
-        newBtn.addEventListener('click', function(e) {
+        btn.addEventListener('click', function(e) {
             e.preventDefault();
             e.stopPropagation();
             
-            // Only load if we have more items
+            console.log('[Portfolio Fix] Load More clicked');
+            
             if (renderedCount < filteredItems.length) {
-                renderNextBatch();
+                const list = container.querySelector(CONFIG.LIST_SELECTOR);
+                renderBatch(container, list);
             }
         });
         
-        // Remove inline pointer-events restriction
-        newBtn.style.pointerEvents = 'auto';
+        btn.style.pointerEvents = 'auto';
     }
 
-    /**
-     * Sync hover preview images with visible items
-     */
+    function updateButtonState(container) {
+        const btn = container.querySelector(CONFIG.LOAD_MORE_SELECTOR);
+        if (!btn) return;
+        
+        const hasMore = renderedCount < filteredItems.length;
+        const textMain = btn.querySelector('.text--main');
+        const textNo = btn.querySelector('.text--no-items');
+        
+        console.log('[Portfolio Fix] Button state:', renderedCount, '/', filteredItems.length, hasMore ? 'more' : 'done');
+        
+        if (hasMore) {
+            btn.classList.remove(CONFIG.DISABLED_CLASS);
+            if (textMain) textMain.style.display = '';
+            if (textNo) textNo.style.display = 'none';
+        } else {
+            btn.classList.add(CONFIG.DISABLED_CLASS);
+            if (textMain) textMain.style.display = 'none';
+            if (textNo) textNo.style.display = '';
+        }
+    }
+
     function syncHoverImages(container) {
         const aside = container.querySelector('.ms-p-list__aside-wrap');
         if (!aside) return;
         
-        // Get IDs of currently visible items
         const list = container.querySelector(CONFIG.LIST_SELECTOR);
-        const visibleItems = list.querySelectorAll(CONFIG.ITEM_SELECTOR);
-        const visibleIds = Array.from(visibleItems).map(item => item.id);
+        const visibleIds = Array.from(list.querySelectorAll(CONFIG.ITEM_SELECTOR))
+            .map(el => el.id);
         
-        // Show/hide corresponding images
-        const images = aside.querySelectorAll('figure.ms-p-list__img');
-        images.forEach(img => {
-            const imgId = img.getAttribute('data-id');
-            if (visibleIds.includes(imgId)) {
-                img.style.display = '';
-            } else {
-                img.style.display = 'none';
-            }
+        aside.querySelectorAll('figure.ms-p-list__img').forEach(img => {
+            const id = img.getAttribute('data-id');
+            img.style.display = visibleIds.includes(id) ? '' : 'none';
         });
     }
 
-    /**
-     * Remove pointer-events CSS blocks
-     */
-    function removePointerEventBlocks(container) {
-        // Remove from filter buttons
-        container.querySelectorAll('.filtr-btn li').forEach(el => {
-            el.style.pointerEvents = 'auto';
-        });
-        
-        // Remove from items
-        container.querySelectorAll(CONFIG.ITEM_SELECTOR).forEach(el => {
-            el.style.pointerEvents = 'auto';
-        });
-    }
-
-    /**
-     * Remove conflicting handlers from theme JS
-     */
-    function removeConflictingHandlers(container) {
-        // Stop any ongoing AJAX by hiding loader
-        const loader = container.querySelector('.load_filter');
-        if (loader) {
-            loader.style.display = 'none';
-        }
-        
-        // Override any global functions that might interfere
-        if (typeof window.jQuery !== 'undefined') {
-            // Remove jQuery handlers from our elements
-            const $ = window.jQuery;
-            $(CONFIG.CONTAINER_SELECTOR).off('click', '.filter-nav__item');
-            $(CONFIG.CONTAINER_SELECTOR).off('click', '.ajax-area--list');
-        }
-    }
-
-    // Initialize when DOM is ready
+    // Initialize
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
+        document.addEventListener('DOMContentLoaded', () => setTimeout(init, 500));
     } else {
-        // DOM already loaded, but wait for other scripts
-        setTimeout(init, 100);
+        setTimeout(init, 500);
     }
-
-    // Also try on window load as backup
-    window.addEventListener('load', function() {
-        if (!isInitialized) {
-            init();
-        }
+    
+    window.addEventListener('load', () => {
+        if (!isInitialized) setTimeout(init, 200);
     });
 
 })();
