@@ -49,53 +49,67 @@
             }
             return originalAjax.apply(this, arguments);
         };
-        
-        // Remove any existing delegated handlers
+    };
+
+    // IMMEDIATE: Remove jQuery delegated handlers if they exist
+    if (typeof window.jQuery !== 'undefined') {
+        const $ = window.jQuery;
         $(document).off('click', '.filter-nav__item');
         $(document).off('click', '.ajax-area--list');
+        $(document).off('click', '.btn-load-more');
+        $(CONFIG.CONTAINER_SELECTOR).off();
     }
 
-    // IMMEDIATE: Global click interceptor (runs before all other handlers)
-    document.addEventListener('click', function(e) {
-        const target = e.target;
+    // IMMEDIATE: Global click interceptor - attach to window to catch events before document
+document.addEventListener('click', function(e) {
+    const target = e.target;
+    
+    // Check if click is on filter button or load more within portfolio
+    const filterBtn = target.closest('.filter-nav__item');
+    const loadMore = target.closest('.ajax-area--list');
+    const inPortfolio = target.closest(CONFIG.CONTAINER_SELECTOR);
+    
+    if (inPortfolio && (filterBtn || loadMore)) {
+        console.log('[Portfolio Fix] INTERCEPTED click on', filterBtn ? 'FILTER' : 'LOAD MORE');
         
-        // Check if click is on filter button or load more within portfolio
-        const filterBtn = target.closest('.filter-nav__item');
-        const loadMore = target.closest('.ajax-area--list');
-        const inPortfolio = target.closest(CONFIG.CONTAINER_SELECTOR);
+        // ABSOLUTELY STOP the event
+        e.stopImmediatePropagation();
+        e.stopPropagation();
+        e.preventDefault();
         
-        if (inPortfolio && (filterBtn || loadMore)) {
-            console.log('[Portfolio Fix] Intercepted click on', filterBtn ? 'filter' : 'load more');
-            e.stopImmediatePropagation();
-            e.preventDefault();
-            
-            if (!isInitialized) {
-                // Queue action for after init
-                if (filterBtn) pendingFilter = filterBtn.getAttribute('data-filter') || 'all';
-                if (loadMore) pendingLoadMore = true;
-                console.log('[Portfolio Fix] Action queued, not initialized yet');
-                return;
-            }
-            
-            // Handle it ourselves
-            if (filterBtn && !filterBtn.classList.contains(CONFIG.ACTIVE_CLASS)) {
-                const filterValue = filterBtn.getAttribute('data-filter') || 'all';
-                
-                // Update active states
-                inPortfolio.querySelectorAll(CONFIG.FILTER_BTN_SELECTOR).forEach(b => {
-                    b.classList.remove(CONFIG.ACTIVE_CLASS);
-                });
-                filterBtn.classList.add(CONFIG.ACTIVE_CLASS);
-                
-                applyFilter(filterValue);
-            } else if (loadMore && renderedCount < filteredItems.length) {
-                const list = inPortfolio.querySelector(CONFIG.LIST_SELECTOR);
-                renderBatch(inPortfolio, list);
-            }
-            
+        // Prevent jQuery from handling it
+        if (typeof window.jQuery !== 'undefined') {
+            window.jQuery(e.target).off('click');
+        }
+        
+        if (!isInitialized) {
+            // Queue action for after init
+            if (filterBtn) pendingFilter = filterBtn.getAttribute('data-filter') || 'all';
+            if (loadMore) pendingLoadMore = true;
+            console.log('[Portfolio Fix] Action queued (not initialized yet)');
             return false;
         }
-    }, true); // Capture phase - runs before bubbling
+        
+        // Handle it ourselves
+        if (filterBtn && !filterBtn.classList.contains(CONFIG.ACTIVE_CLASS)) {
+            const filterValue = filterBtn.getAttribute('data-filter') || 'all';
+            
+            // Update active states
+            inPortfolio.querySelectorAll(CONFIG.FILTER_BTN_SELECTOR).forEach(b => {
+                b.classList.remove(CONFIG.ACTIVE_CLASS);
+            });
+            filterBtn.classList.add(CONFIG.ACTIVE_CLASS);
+            
+            applyFilter(filterValue);
+        } else if (loadMore && renderedCount < filteredItems.length) {
+            const list = inPortfolio.querySelector(CONFIG.LIST_SELECTOR);
+            renderBatch(inPortfolio, list);
+            updateButtonState(inPortfolio);
+        }
+        
+        return false;
+    }
+}, true); // Capture phase - runs before bubbling
 
     /**
      * Clean clone - removes all event handlers
